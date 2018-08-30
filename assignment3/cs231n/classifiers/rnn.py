@@ -49,26 +49,27 @@ class CaptioningRNN(object):
         self._end = word_to_idx.get('<END>', None)
 
         # Initialize word vectors
-        self.params['W_embed'] = np.random.randn(vocab_size, wordvec_dim)
+        self.params['W_embed'] = np.random.randn(vocab_size, wordvec_dim) # (V, W)
         self.params['W_embed'] /= 100
 
         # Initialize CNN -> hidden state projection parameters
-        self.params['W_proj'] = np.random.randn(input_dim, hidden_dim)
+        self.params['W_proj'] = np.random.randn(input_dim, hidden_dim)   # (D, H)
         self.params['W_proj'] /= np.sqrt(input_dim)
         self.params['b_proj'] = np.zeros(hidden_dim)
 
         # Initialize parameters for the RNN
         dim_mul = {'lstm': 4, 'rnn': 1}[cell_type]
-        self.params['Wx'] = np.random.randn(wordvec_dim, dim_mul * hidden_dim)
+        self.params['Wx'] = np.random.randn(wordvec_dim, dim_mul * hidden_dim)  # (W, (1 or 4)H)
         self.params['Wx'] /= np.sqrt(wordvec_dim)
-        self.params['Wh'] = np.random.randn(hidden_dim, dim_mul * hidden_dim)
+        self.params['Wh'] = np.random.randn(hidden_dim, dim_mul * hidden_dim)   # (H, (1 or 4)H)
         self.params['Wh'] /= np.sqrt(hidden_dim)
-        self.params['b'] = np.zeros(dim_mul * hidden_dim)
+        self.params['b'] = np.zeros(dim_mul * hidden_dim)   # ((1 or 4)H,)
 
         # Initialize output to vocab weights
-        self.params['W_vocab'] = np.random.randn(hidden_dim, vocab_size)
+        # project hiddent state onto the vocab dimension
+        self.params['W_vocab'] = np.random.randn(hidden_dim, vocab_size) # (H, V)
         self.params['W_vocab'] /= np.sqrt(hidden_dim)
-        self.params['b_vocab'] = np.zeros(vocab_size)
+        self.params['b_vocab'] = np.zeros(vocab_size)    # (V,)
 
         # Cast parameters to correct dtype
         for k, v in self.params.items():
@@ -140,7 +141,78 @@ class CaptioningRNN(object):
         # Note also that you are allowed to make use of functions from layers.py   #
         # in your implementation, if needed.                                       #
         ############################################################################
-        pass
+        
+        ### forward pass ###
+        # step(1), use affine_forward in layers.py to project
+        # image features on the hidden_state dimension
+        # features: (N, D)
+        # W_proj:   (D, H)
+        # b_proj:   (H,)
+        # to produce initial hidden state
+        # h0:       (N, H)
+        h0, cache_proj = affine_forward(features, W_proj, b_proj)
+
+        # step(2), use word_embedding_forward in rnn_layers.py 
+        # captions_in: (N, T)
+        # W_embed:     (V, W)
+        # to produce word embedding of captions_in
+        # x_captions_in: (N, T, W)
+        x_captions_in, cache_captions_in = word_embedding_forward(captions_in, W_embed) 
+
+        # step(3), vanilla RNN or LSTM
+        # if vanilla RNN:
+        #   use rnn_forward in rnn_layers.py
+        #   x_capions_in: (N, T, W)
+        #   h0: (N, H)
+        #   Wx: (W, H)
+        #   Wh: (H, H)
+        #    b: (H,)
+        #   to produce hidden state of all time steps
+        #   h:  (N, T, H)
+        if self.cell_type == "rnn":
+            h, cache_forward = rnn_forward(x_captions_in, h0, Wx, Wh, b)
+
+        # step(4), compute score using temporal affine forward with the initial state
+        # of all time steps.
+        # i.e project the hidden state of all time steps onto the vocab dimension
+        # h: (N, T, H)
+        # W_vocab: (H, V)
+        # b_vocab: (V,)
+        # to produce the batches of score of all time steps
+        # score_vocab: (N, T, V)
+        score_vocab, cache_vocab = temporal_affine_forward(h, W_vocab, b_vocab) 
+
+        # step(5), compute the softmax loss for each time steps. the ground truth is
+        # captions_out/
+        # input:
+        #   score_vocab:  (N, T, V)
+        #   captions_out: (N, T)
+        #   mask: 
+        # output:
+        #   loss
+        #   dx_captions_in: (N, T, V)
+
+        loss, dscore_vocab = temporal_softmax_loss(score_vocab, captions_out, mask) 
+        
+        ### backward pass ###
+        # for dh, dW_vocal, db_vocab
+        dh, dW_vocab, db_vocab = temporal_affine_backward(dscore_vocab, cache_vocab)
+        grads['W_vocab'], grads['b_vocab'] = dW_vocab, db_vocab
+        
+        # for dx_captions_in, dh0, dWx, dWh, db 
+        dx_captions_in, dh0, dWx, dWh, db = rnn_backward(dh, cache_forward)
+        grads['Wx'], grads['Wh'], grads['b'] = dWx, dWh, db
+
+        # for dW_embed
+        dW_embed = word_embedding_backward(dx_captions_in, cache_captions_in)
+        grads['W_embed'] = dW_embed
+
+        # for dx, dw, db: no need to update these
+        # input:
+        #   dW_embed: (V, W)
+        #   cache_proj: features(N, D), W_proj(D, H), b_proj(H,)
+        #dx, dw, db = affine_backward(dW_embed, cache_proj) 
+        
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
