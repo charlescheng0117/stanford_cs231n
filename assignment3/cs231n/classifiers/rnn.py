@@ -207,15 +207,18 @@ class CaptioningRNN(object):
         dW_embed = word_embedding_backward(dx_captions_in, cache_captions_in)
         grads['W_embed'] = dW_embed
 
-        # for dx, dw, db: no need to update these
+        # for dx, dw, db: use gradients of initial state as the bridge to compute
+        # dx, dw, db
         # input:
-        #   dW_embed: (V, W)
+        #   dh0: (N, H)
         #   cache_proj: features(N, D), W_proj(D, H), b_proj(H,)
-        #dx, dw, db = affine_backward(dW_embed, cache_proj) 
+        dfeatures, dW_proj, db_proj = affine_backward(dh0, cache_proj)
+        grads['W_proj'], grads['b_proj'] = dW_proj, db_proj
         
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
+         
 
         return loss, grads
 
@@ -277,7 +280,38 @@ class CaptioningRNN(object):
         # NOTE: we are still working over minibatches in this function. Also if   #
         # you are using an LSTM, initialize the first cell state to zeros.        #
         ###########################################################################
-        pass
+        # 0. get the initial hidden state and the start token to feed into RNN
+        # h0: (N, H) 
+        h0, _ = affine_forward(features, W_proj, b_proj)
+        # word starts ar the <START> token
+        # mini_batches, so we have N of it
+        prev_words = np.array(N * [self._start]) # (N, )
+        prev_h = h0
+        
+        captions[:, 0] = prev_words
+        # sample max_length steps
+        for t in range(1, max_length):
+            # embed previous word using W_embed
+            # word_embed: (N, W)
+            # Wx: (W, H)
+            # Wh: (H, H)
+            word_embed = W_embed[prev_words, :] 
+            # step2
+            next_h, _ = rnn_step_forward(word_embed, prev_h, Wx, Wh, b)
+            # step3
+            # scores: (N, 1, V)
+            next_h_t = np.reshape(next_h, (N, 1, -1)) # reshape to (N, 1, H)
+            scores, _ = temporal_affine_forward(next_h_t, W_vocab, b_vocab)
+            # reshape back to (N, V)
+            scores = np.reshape(scores, (N, -1))
+
+            # step4
+            words_ix = np.argmax(scores, axis=1)
+            captions[:, t] = words_ix
+            
+            prev_words = words_ix
+            prev_h = next_h
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
