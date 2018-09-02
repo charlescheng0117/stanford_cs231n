@@ -83,7 +83,7 @@ def relu_forward(x):
     ###########################################################################
     # TODO: Implement the ReLU forward pass.                                  #
     ###########################################################################
-    pass
+    out = np.maximum(0.0, x)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -106,7 +106,7 @@ def relu_backward(dout, cache):
     ###########################################################################
     # TODO: Implement the ReLU backward pass.                                 #
     ###########################################################################
-    pass
+    dx = dout * (x > 0)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -182,7 +182,17 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # Referencing the original paper (https://arxiv.org/abs/1502.03167)   #
         # might prove to be helpful.                                          #
         #######################################################################
-        pass
+        
+        # Algorithm in page 3: https://arxiv.org/pdf/1502.03167.pdf 
+        sample_mean, sample_std = np.mean(x, axis=0), np.std(x, axis=0)
+        sample_var = sample_std ** 2
+
+        running_mean = momentum * running_mean + (1 - momentum) * sample_mean
+        running_var = momentum * running_var + (1 - momentum) * sample_var
+
+        x_norm = (x - sample_mean) / (np.sqrt(sample_var + eps))
+        out = gamma * x_norm + beta 
+        cache = (x, gamma, beta, eps, sample_mean, sample_var, x_norm, running_mean, running_var)
         #######################################################################
         #                           END OF YOUR CODE                          #
         #######################################################################
@@ -193,7 +203,8 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # then scale and shift the normalized data using gamma and beta.      #
         # Store the result in the out variable.                               #
         #######################################################################
-        pass
+        x_norm = (x - running_mean) / (np.sqrt(running_var + eps))
+        out = gamma * x_norm + beta
         #######################################################################
         #                          END OF YOUR CODE                           #
         #######################################################################
@@ -231,7 +242,18 @@ def batchnorm_backward(dout, cache):
     # Referencing the original paper (https://arxiv.org/abs/1502.03167)       #
     # might prove to be helpful.                                              #
     ###########################################################################
-    pass
+    (x, gamma, beta, eps, sample_mean, sample_var, x_norm, running_mean, running_var) = cache
+    # forward step:
+    # x_norm = (x - sample_mean) / (np.sqrt(sample_var + eps))
+    # out = gamma * x_norm + beta 
+    dx_norm = dout * gamma
+    
+    # here should consult the paper at page 4/11
+    dx = dx_norm * 1/(np.sqrt(sample_var + eps))
+
+    dgamma = np.sum(dout * x_norm, axis=0)
+    dbeta = np.sum(dout, axis=0)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
