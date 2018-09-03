@@ -574,7 +574,34 @@ def conv_forward_naive(x, w, b, conv_param):
     # TODO: Implement the convolutional forward pass.                         #
     # Hint: you can use the function np.pad for padding.                      #
     ###########################################################################
-    pass
+    N, C, H, W = x.shape
+    F, _, HH, WW = w.shape
+    stride, pad = conv_param['stride'], conv_param['pad']
+
+    H_out = int(1 + (H + 2 * pad - HH) / stride)
+    W_out = int(1 + (W + 2 * pad - WW) / stride)
+
+    out = np.zeros((N, F, H_out, W_out))
+    
+    # ((before_1, after_1), ..., (before_4, after_4)), where 1, ..., 4 means the axis
+    # this results x, (N, C, H, W) to become x', (N, C, H+2, W+2)
+    pad_width = ((0, 0), (0, 0), (pad, pad), (pad, pad))
+    x_pad = np.pad(x, pad_width, 'constant', constant_values=(0, 0)) 
+
+    # nth data in mini_batch
+    for n in range(N):
+        xn = x_pad[n]
+        # fth filter
+        for f in range(F):
+            wf = w[f] # (C, HH, WW) 
+            for i in range(H_out):
+                H_start = i * stride
+                for j in range(W_out):
+                    W_start = j * stride
+                    recep_field = xn[:, H_start:H_start+HH, W_start:W_start+WW] # (C, HH, WW)
+             
+                    out[n, f, i, j] = np.sum(wf * recep_field) + b[f] # conv operation + bias
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -599,7 +626,53 @@ def conv_backward_naive(dout, cache):
     ###########################################################################
     # TODO: Implement the convolutional backward pass.                        #
     ###########################################################################
-    pass
+    x, w, b, conv_param = cache 
+    N, C, H, W = x.shape
+    F, _, HH, WW = w.shape
+    stride, pad = conv_param['stride'], conv_param['pad']
+
+    H_out = int(1 + (H + 2 * pad - HH) / stride)
+    W_out = int(1 + (W + 2 * pad - WW) / stride)
+
+    pad_width = ((0, 0), (0, 0), (pad, pad), (pad, pad))
+    x_pad = np.pad(x, pad_width, 'constant', constant_values=(0, 0)) 
+    
+    dx_pad = np.zeros_like(x_pad)
+    dw = np.zeros_like(w)
+
+    # nth data in mini_batch
+    for n in range(N):
+        xn = x_pad[n]
+        # we calculate the gradients of padded x
+        dxn = dx_pad[n]
+        # fth filter
+        for f in range(F):
+            wf = w[f] # (C, HH, WW) 
+            dwf = dw[f]
+            for i in range(H_out):
+                H_start = i * stride
+                for j in range(W_out):
+                    """ forward pass 
+                    W_start = j * stride
+                    recep_field = xn[:, H_start:H_start+HH, W_start:W_start+WW] # (C, HH, WW)
+             
+                    out[n, f, i, j] = np.sum(wf * recep_field) + b[f] # conv operation + bias
+                    """
+                    W_start = j * stride
+                    recep_field = xn[:, H_start:H_start+HH, W_start:W_start+WW] # (C, HH, WW)
+                    drecep_field = dxn[:, H_start:H_start+HH, W_start:W_start+WW] # (C, HH, WW) 
+
+                    dout_nfij = dout[n, f, i, j]
+                    # gradients passed to wf
+                    dwf += dout_nfij * recep_field
+                    # gradients passed to recep_field
+                    drecep_field += dout_nfij * wf
+
+    dx = dx_pad[:, :, pad:pad+H, pad:pad+W]
+
+    # just sum all of them for each channel f in F
+    #db = dout.sum(axis=0).sum(axis=1).sum(axis=1)  
+    db = dout.reshape((N, F, -1)).sum(axis=2).sum(axis=0)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -629,7 +702,24 @@ def max_pool_forward_naive(x, pool_param):
     ###########################################################################
     # TODO: Implement the max-pooling forward pass                            #
     ###########################################################################
-    pass
+    N, C, H, W = x.shape
+    pool_h, pool_w, stride = pool_param['pool_height'], pool_param['pool_width'], pool_param['stride']
+    
+    H_out = 1 + (H - pool_h) // stride
+    W_out = 1 + (W - pool_w) // stride
+
+    out = np.zeros((N, C, H_out, W_out))
+
+    for n in range(N):
+        xn = x[n]
+        for c in range(C):
+            for i in range(H_out):
+                H_start = i * stride
+                for j in range(W_out):
+                    W_start = j * stride
+                    recep_field = xn[c, H_start:H_start + pool_h, W_start:W_start + pool_w]
+                    out[n, c, i, j] = np.max(recep_field)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -652,7 +742,37 @@ def max_pool_backward_naive(dout, cache):
     ###########################################################################
     # TODO: Implement the max-pooling backward pass                           #
     ###########################################################################
-    pass
+    x, pool_param = cache
+    N, C, H, W = x.shape
+    pool_h, pool_w, stride = pool_param['pool_height'], pool_param['pool_width'], pool_param['stride']
+    
+    H_out = 1 + (H - pool_h) // stride
+    W_out = 1 + (W - pool_w) // stride
+
+    dx = np.zeros_like(x)
+    for n in range(N):
+        xn = x[n]
+        dxn = dx[n]
+        for c in range(C):
+            for i in range(H_out):
+                H_start = i * stride
+                for j in range(W_out):
+                    """
+                    forward pass:
+                    W_start = j * stride
+                    recep_field = xn[c, H_start:H_start + pool_h, W_start:W_start + pool_w]
+                    out[n, c, i, j] = np.max(recep_field)
+                    """
+                    W_start = j * stride
+                    recep_field = xn[c, H_start:H_start + pool_h, W_start:W_start + pool_w]
+                    # https://docs.scipy.org/doc/numpy/reference/generated/numpy.argmax.html
+                    max_ind = np.unravel_index(np.argmax(recep_field, axis=None), recep_field.shape)
+                    max_recep = np.max(xn)
+
+                    # gradients only pass to xn's index with max value
+                    max_i, max_j = max_ind
+                    dxn[c, H_start + max_i, W_start + max_j] += dout[n, c, i, j] * 1
+    
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
