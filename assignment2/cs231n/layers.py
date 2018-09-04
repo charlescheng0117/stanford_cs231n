@@ -423,12 +423,7 @@ def layernorm_backward(dout, cache):
     f3. xi_hat = (xn - mu_i)/ \sqrt{var_i + eps}
     f4. yi = gamma * xi_hat + beta
     
-    so backward,
-
-    b1. dxi_hat = dyi * gamma 
-    b2. 
-
-
+    backward steps listed below
     """
 
     N, D = x.shape 
@@ -810,13 +805,39 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # vanilla version of batch normalization you implemented above.           #
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
-    pass
+    
+    # check page 5 of https://arxiv.org/pdf/1502.03167.pdf
+    # originally:
+    #   - mini_batch is x: (N, D), compute
+    #   - mu_b = 1/N * \sum_{i=1}^{N} x_i  (mu_b has shape: (D,))
+    #   - var_b = 1/N * \sum_{i=1}^{N} (x_i - mu_b) ** 2 (var_b has shape: (D,))
+    # now becomes: 
+    #   - mini_batch: x, (N, C, H, W), compute
+    #   - mu_b = 1/(N*H*W) * \sum_{i=1}^{N*H*W} x_i (mu_b has shape: (C,))
+    #   - var_b = 1/(N*H*W) * \sum_{i=1}^{N*H*W} (x_i-mu_b) ** 2 (var_b has shape: (C,))
+    
+    # first swap axis of x so that
+    #   - x.shape: (N, C, H, W) -> (C, N, H, W)
+    #   - then flatten x to (N*H*W, C)
+    #   - transpose x: (C, N*H*W)
+    N, C, H, W = x.shape
+    x_swap = np.swapaxes(x, 0, 1)
+    x_flat = x_swap.reshape((C, -1)).T # (N*H*W, C)
+    
+    # steps are in backward order of the above
+    #   - calculate the batchnorm of x_flat => out, (N*H*W, C)
+    #   - transpose out => out, (C, N*H*W)
+    #   - re-reshape => out, (C, N, H, W)
+    #   - swap axes back => out, (N, C, H, W)
+    out_flat, cache = batchnorm_forward(x_flat, gamma, beta, bn_param) # out (N*H*W, C)
+    out_swap = out_flat.T.reshape((C, N, H, W))
+    out = np.swapaxes(out_swap, 0, 1)
+    
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
 
     return out, cache
-
 
 def spatial_batchnorm_backward(dout, cache):
     """
@@ -840,7 +861,16 @@ def spatial_batchnorm_backward(dout, cache):
     # vanilla version of batch normalization you implemented above.           #
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
-    pass
+    N, C, H, W = dout.shape    
+    
+    # just do the steps in spatial_batchnorm_forward in opposite order
+    dout_swap = np.swapaxes(dout, 0, 1) # (C, N, H, W)
+    dout_flat = np.reshape(dout_swap, (C, -1)).T # (N*H*W, C) 
+    
+    dx_flat, dgamma, dbeta = batchnorm_backward(dout_flat, cache) # dx, (N*H*W, C)
+    dx_swap = dx_flat.T.reshape((C, N, H, W))
+    dx = np.swapaxes(dx_swap, 0, 1) 
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -876,7 +906,27 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     # the bulk of the code is similar to both train-time batch normalization  #
     # and layer normalization!                                                # 
     ###########################################################################
-    pass
+    
+    # see paper: page4, https://arxiv.org/pdf/1803.08494.pdf
+    N, C, H, W = x.shape
+    x_original = x.copy()
+    x = np.reshape(x, (N, G, C//G, H, W))
+
+    feat_mean = np.mean(x, axis=(2, 3, 4), keepdims=True) # mu_g, (N, G, 1, 1, 1)
+    feat_std = np.std(x, axis=(2, 3, 4), keepdims=True)   # std_g, (N, G, 1, 1, 1)
+    feat_var = feat_std ** 2
+
+    x_hat = (x - feat_mean)/np.sqrt(feat_var + eps) # x_hat, (N, G, C//G, H, W)
+    x_hat = np.reshape(x_hat, (N, C, H, W)) # reshape back to (N, C, H, W)
+
+    gamma = np.reshape(gamma, (1, C, 1, 1))
+    beta = np.reshape(beta, (1, C, 1, 1))
+    out = gamma * x_hat + beta 
+    
+    cache = (x, x_original, gamma, beta, eps, feat_mean, feat_var, x_hat) 
+    # forward
+    #x_flat = np.reshape(x, (N, -1)) # x_flat, (N, C*H*W) 
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -902,7 +952,30 @@ def spatial_groupnorm_backward(dout, cache):
     # TODO: Implement the backward pass for spatial group normalization.      #
     # This will be extremely similar to the layer norm implementation.        #
     ###########################################################################
-    pass
+    (x, x_original, gamma, beta, eps, feat_mean, feat_var, x_hat) = cache
+
+    N, G, C_divide_G, H, W = x.shape # (N, G, C//G, H, W)
+    C = G * C_divide_G
+    # again, just do it backward opposed to the forward pass
+    
+    # b1
+    dx_hat = dout * gamma # (N, C, H, W)
+    dx_hat = np.reshape(dx_hat, (N, G, C//G, H, W)) # (N, G, C//G, H, W)
+
+    # b2
+    dfeat_var = np.sum(dx_hat * (x - feat_mean) * (-1/2 * (feat_var + eps) ** (-3/2)), axis=(2, 3, 4), keepdims=True) # (N, G, 1, 1, 1)
+
+    # b3
+    dfeat_mean = np.sum(dx_hat * (-1/np.sqrt(feat_var + eps)), axis=(2, 3, 4), keepdims=True) + dfeat_var * 2/(C_divide_G*H*W) * np.sum(x - feat_mean, axis=(2, 3, 4), keepdims=True)
+
+    # b4
+    dx = dx_hat * 1/np.sqrt(feat_var + eps) + dfeat_var * 2/(C_divide_G*H*W) * (x-feat_mean) + dfeat_mean/(C_divide_G*H*W) # (N, G, C//G, H, W)
+    dx = np.reshape(dx, (N, C, H, W)) # reshape back to (N, C, H, W)
+    
+    # test actually want shapes: (1, C, 1, 1)
+    dgamma = np.sum(dout * x_hat, axis=(0, 2, 3), keepdims=True)
+    dbeta = np.sum(dout, axis=(0, 2, 3), keepdims=True)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
