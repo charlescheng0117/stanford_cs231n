@@ -304,7 +304,13 @@ class FullyConnectedNet(object):
                 zi = z_fci
             
             # relu forward
-            ai, cache_ri = relu_forward(zi)
+            a_ri, cache_ri = relu_forward(zi)
+            
+            if self.use_dropout:
+                ai, cache_doi = dropout_forward(a_ri, self.dropout_param)
+                cache['do{}'.format(i)] = cache_doi
+            else:
+                ai = a_ri
             
             cache['fc{}'.format(i)] = cache_fci # cache for affine_forward
             cache['r{}'.format(i)] = cache_ri # cache for relu_forward
@@ -349,6 +355,13 @@ class FullyConnectedNet(object):
         for i in reversed(range(1, L)):
             # relu backward
             drelu_i = relu_backward(da_prev, cache['r{}'.format(i)])
+
+            # dropout backward
+            if self.use_dropout:
+                cache_doi = cache['do{}'.format(i)] 
+                ddropout_i = dropout_backward(drelu_i, cache_doi)
+                
+                drelu_i =ddropout_i
             
             if self.normalization is not None:
                 # batchnorm backward
